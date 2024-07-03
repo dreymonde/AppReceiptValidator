@@ -7,7 +7,6 @@
 //
 
 import ASN1Decoder
-import Crypto
 import Foundation
 
 /// Apple guide: https://developer.apple.com/library/content/releasenotes/General/ValidateAppStoreReceipt/Introduction.html
@@ -21,49 +20,6 @@ public struct AppReceiptValidator {
     // MARK: - Lifecycle
 
     public init() {}
-
-    // MARK: - Local Receipt Validation
-
-    /// Validates a local receipt and returns the result using the passed parameters.
-    public func validateReceipt(parameters: Parameters = Parameters.default) -> Result {
-        var data: Data?
-        var deviceIdData: Data?
-        do {
-            deviceIdData = parameters.deviceIdentifier.getData()
-            guard let receiptData = parameters.receiptOrigin.loadData() else { throw Error.couldNotFindReceipt }
-
-            data = receiptData
-            let receiptContainer = try self.extractPKCS7Container(data: receiptData)
-
-            if parameters.shouldValidateSignaturePresence {
-                try self.checkSignaturePresence(pkcs7: receiptContainer)
-            }
-            if case .shouldValidate(let rootCertificateOrigin) = parameters.signatureValidation {
-                guard let appleRootCertificateData = rootCertificateOrigin.loadData() else { throw Error.appleRootCertificateNotFound }
-
-                try self.checkSignatureAuthenticity(pkcs7: receiptContainer, appleRootCertificateData: appleRootCertificateData, rawData: data)
-            }
-            let receipt = try self.parseReceipt(pkcs7: receiptContainer).receipt
-
-            try self.validateProperties(receipt: receipt, validations: parameters.propertyValidations)
-
-            if parameters.shouldValidateHash {
-                guard let deviceIdentifierData = deviceIdData else { throw Error.deviceIdentifierNotDeterminable }
-
-                try self.validateHash(receipt: receipt, deviceIdentifierData: deviceIdentifierData)
-            }
-
-            return .success(receipt, receiptData: receiptData, deviceIdentifier: deviceIdData)
-        } catch {
-            return .error(error as? AppReceiptValidator.Error ?? .unknown, receiptData: data, deviceIdentifier: deviceIdData)
-        }
-    }
-
-    public func validateProperties(receipt: Receipt, validations: [Parameters.PropertyValidation]) throws {
-        for validation in validations {
-            try validation.validateProperty(of: receipt)
-        }
-    }
 
     /// Parse a local receipt without any validation.
     ///
@@ -88,37 +44,6 @@ public struct AppReceiptValidator {
 
         let receiptContainer = try self.extractPKCS7Container(data: receiptData)
         return try parseReceipt(pkcs7: receiptContainer, parseUnofficialParts: true)
-    }
-}
-
-// MARK: - Full Validation
-
-private extension AppReceiptValidator {
-
-    func validateHash(receipt: Receipt, deviceIdentifierData: Data) throws {
-        // Make sure that the Receipt instances has non-nil values needed for hash comparison
-        guard let receiptOpaqueValueData = receipt.opaqueValue else { throw Error.incorrectHash }
-        guard let receiptBundleIdData = receipt.bundleIdData else { throw Error.incorrectHash }
-        guard let receiptHashData = receipt.sha1Hash else { throw Error.incorrectHash }
-
-        // Compute the hash for your app & device
-
-        // Set up the hashing context
-        var sha1 = Insecure.SHA1()
-        deviceIdentifierData.withUnsafeBytes { pointer -> Void in
-            sha1.update(bufferPointer: pointer)
-        }
-        receiptOpaqueValueData.withUnsafeBytes { pointer -> Void in
-            sha1.update(bufferPointer: pointer)
-        }
-        receiptBundleIdData.withUnsafeBytes { pointer -> Void in
-            sha1.update(bufferPointer: pointer)
-        }
-        let digest = sha1.finalize()
-        // Compare the computed hash with the receipt's hash
-        if Data(digest) != receiptHashData {
-            throw Error.incorrectHash
-        }
     }
 }
 
